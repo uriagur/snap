@@ -85,7 +85,7 @@ public:
   /// Plots the Network Community Profile (NCP) of a given graph Graph.
   /// The NCP plot of a network captures the global community structure of the network. ##TLocClust::PlotNCP
   static void PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc="", const bool& BagOfWhiskers=true, const bool& RewireNet=false,
-    const int& KMin=10, const int& KMax=Mega(100), const int& Coverage=10, const bool& SaveTxtStat=false, const bool& PlotBoltzman=false);
+    const int& KMin=10, const int& KMax=Mega(100), const int& Coverage=10, const bool& SaveTxtStat=false, const bool& PlotBoltzman=false, const int& SeedNId=-1);
 
   friend class TLocClustStat;
 };
@@ -162,7 +162,7 @@ public:
   void Save(TSOut& SOut) const;
   void Clr();
   void SetGraph(const PUNGraph& GraphPt) { Graph=GraphPt; }
-  void Run(const PUNGraph& Graph, const bool& SaveAllSweeps=false, const bool& SaveAllCond=false, const bool& SaveBestNodesAtK=false);
+  void Run(const PUNGraph& Graph, const bool& SaveAllSweeps=false, const bool& SaveAllCond=false, const bool& SaveBestNodesAtK=false, const int& SeedNId=-1);
   void AddBagOfWhiskers();
   void AddCut(const TIntV& NIdV);
   void AddCut(const int& ClustSz, const double& Phi);
@@ -199,6 +199,7 @@ public:
   void ImposeNCP(const TLocClustStat& LcStat2, TStr OutFNm, TStr Desc, TStr Desc1, TStr Desc2) const;
   void ImposeNCP(const TLocClustStat& LcStat2, const TLocClustStat& LcStat3, TStr OutFNm, TStr Desc, TStr Desc1, TStr Desc2, TStr Desc3) const;
   void SaveTxtInfo(const TStr& OutFNmPref, const TStr& Desc, const bool& SetMaxAt1) const;
+  void SaveBestCut(const TStr& OutFNm) const; // save the best cut node IDs to file
 
   static void BagOfWhiskers(const PUNGraph& Graph, TFltPrV& SizePhiV, TFltPr& BestWhisk);
   static void BagOfWhiskers2(const PUNGraph& Graph, TFltPrV& SizePhiV);

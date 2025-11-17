@@ -17,6 +17,7 @@ int main(int argc, char* argv[]) {
   const int KMin = Env.GetIfArgPrefixInt("-kmin:", 10, "minimum K (volume)");
   const int KMax = Env.GetIfArgPrefixInt("-kmax:", Mega(100), "maximum K (volume)");
   const int Coverage = Env.GetIfArgPrefixInt("-c:", 10, "coverage (so that every node is covered C times)");
+  const int SeedNId = Env.GetIfArgPrefixInt("-seed:", -1, "Seed node ID (if >= 0, use this node instead of random seeds)");
   TLocClust::Verbose = Env.GetIfArgPrefixBool("-v:", true, "Verbose (plot intermediate output)");
   if (OutFNm.Empty()) { OutFNm = InFNm.GetFMid(); }
   if (Desc.Empty()) { Desc = OutFNm; }
@@ -33,7 +34,7 @@ int main(int argc, char* argv[]) {
   printf("*** Plotting network community profile (NCP)\n");
   //TLocClust::PlotNCP(Graph, OutFNm, , DoWhisk, DoRewire, KMin, KMax, Coverage, SaveInfo);
   TLocClust::PlotNCP(Graph, OutFNm, "Graph: "+InFNm+" -> "+OutFNm+" "+Desc,
-    DoWhisk, DoRewire, KMin, KMax, Coverage, SaveInfo);
+    DoWhisk, DoRewire, KMin, KMax, Coverage, SaveInfo, false, SeedNId);
   Catch
   printf("\nrun time: %s (%s)\n", ExeTm.GetTmStr(), TSecTm::GetCurTm().GetTmStr().CStr());
   

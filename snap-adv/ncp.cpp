@@ -216,22 +216,23 @@ void TLocClust::GetCutStat(const PUNGraph& Graph, const TIntSet& NIdSet, int& Vo
   }
 }
 
-void TLocClust::PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc, const bool& BagOfWhiskers, const bool& RewireNet, const int& KMin, const int& KMax, const int& Coverage, const bool& SaveTxtStat, const bool& PlotBoltzman) {
+void TLocClust::PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc, const bool& BagOfWhiskers, const bool& RewireNet, const int& KMin, const int& KMax, const int& Coverage, const bool& SaveTxtStat, const bool& PlotBoltzman, const int& SeedNId) {
   const double Alpha = 0.001, KFac = 1.5, SizeFrac = 0.001;
   //const int KMin = 2, KMax = Mega(100), Coverage = 10;
   TLocClustStat ClusStat1(Alpha, KMin, KMax, KFac, Coverage, SizeFrac);
-  ClusStat1.Run(Graph, false, PlotBoltzman, SaveTxtStat);
+  ClusStat1.Run(Graph, false, PlotBoltzman, SaveTxtStat, SeedNId);
   if (BagOfWhiskers) { ClusStat1.AddBagOfWhiskers(); }
   TLocClustStat ClusStat2(Alpha, KMin, KMax, KFac, Coverage, SizeFrac);
   ClusStat1.ImposeNCP(ClusStat2, FNm, Desc, "ORIGINAL", "REWIRED"); // plot before rewiring
   if (SaveTxtStat) { // for every piece size store modularity
     ClusStat1.SaveTxtInfo(FNm, Desc, false);
+    ClusStat1.SaveBestCut(FNm); // save the best cut node IDs
   }
   if (PlotBoltzman) {
     ClusStat1.PlotBoltzmanCurve(FNm, Desc);
   }
   if (RewireNet) {
-    ClusStat2.Run(TSnap::GenRewire(Graph, 50, TInt::Rnd), false, false, false);
+    ClusStat2.Run(TSnap::GenRewire(Graph, 50, TInt::Rnd), false, false, false, SeedNId);
     if (BagOfWhiskers) { ClusStat2.AddBagOfWhiskers(); }
     ClusStat1.ImposeNCP(ClusStat2, FNm, Desc, "ORIGINAL", "REWIRED"); // if rewire, plot again
   }
@@ -297,7 +298,7 @@ void TLocClustStat::Clr() {
   BagOfWhiskerV.Clr(false); // (Size, Conductance) of bag of whiskers clusters
 }
 
-void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const bool& SaveAllCond, const bool& SaveBestNodesAtK) {
+void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const bool& SaveAllCond, const bool& SaveBestNodesAtK, const int& SeedNId) {
   Graph = TSnap::GetMxWcc(_Graph);
   const int Nodes = Graph->GetNodes();
   const int Edges = Graph->GetEdges();
@@ -305,7 +306,11 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
   printf("  Alpha:    %g\n", Alpha());
   printf("  K: %d -- %g -- %dm\n", KMin(), KFac(), int(KMax/Mega(1)));
   printf("  Coverage: %d\n", Coverage());
-  printf("  SizeFrac: %g\n\n", SizeFrac());
+  printf("  SizeFrac: %g\n", SizeFrac());
+  if (SeedNId >= 0) {
+    printf("  Seed Node: %d (constant seed - single node NCP)\n", SeedNId);
+  }
+  printf("\n");
   TExeTm TotTm;
   Clr();
   TLocClust Clust(Graph, Alpha);
@@ -326,7 +331,7 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
   }
   for (int K = KMin, cnt=1; K < KMax; K = int(KFac * double(K))+1, cnt++) {
     if (K == prevK) { K++; } prevK = K;
-    const int Runs = 2 + int(Coverage /**pow(1.1, cnt)*/ * floor(double(Graph->GetEdges()) / double(K)));
+    const int Runs = (SeedNId >= 0) ? 1 : (2 + int(Coverage /**pow(1.1, cnt)*/ * floor(double(Graph->GetEdges()) / double(K))));
     printf("%d] K: %d, %d runs\n", cnt+1, K, Runs);
     if (NextDone) { break; } // done
     if (K+1 > 2*Graph->GetEdges()) { K = Graph->GetEdges(); NextDone=true; }
@@ -334,15 +339,15 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
     TExeTm ExeTm, IterTm;
     double MeanSz=0.0, MeanVol=0.0, Count=0.0;
     for (int run = 0; run < Runs; run++) {
-      const int SeedNId = Graph->GetRndNId();  IterTm.Tick();
-      Clust.FindBestCut(SeedNId, K, SizeFrac);
+      const int CurrentSeedNId = (SeedNId >= 0) ? SeedNId : Graph->GetRndNId();  IterTm.Tick();
+      Clust.FindBestCut(CurrentSeedNId, K, SizeFrac);
       const int Sz = Clust.BestCutNodes();
       const int Vol = Clust.GetCutVol();
       const double Phi = TMath::Round(Clust.GetCutPhi(), 4);
       if (Sz == 0 || Vol == 0 || Phi == 0) { continue; }
       MeanSz+=Sz;  MeanVol+=Vol;  Count+= 1;
       if (SaveAllSweeps) { // save the full cut set and conductances for all trials
-        SweepsV.Add(TNodeSweep(SeedNId, Clust.GetNIdV(), Clust.GetPhiV())); }
+        SweepsV.Add(TNodeSweep(CurrentSeedNId, Clust.GetNIdV(), Clust.GetPhiV())); }
       int SAtBestPhi=-1;
       for (int s = 0; s < Clust.Len(); s++) {
         const int size = s+1;
@@ -398,7 +403,27 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
     SizePhiH[k].Sort(); }
   SweepsV.Sort();
   BestCutH.SortByKey();
-  printf("DONE. Graph(%d, %d): Total run time: %s\n\n", Nodes, Edges, TotTm.GetStr());
+  printf("DONE. Graph(%d, %d): Total run time: %s\n", Nodes, Edges, TotTm.GetStr());
+
+  // Print best cut information
+  if (BestCut.GetNodes() > 0) {
+    printf("\n*** BEST CUT (Lowest Conductance) ***\n");
+    printf("  Nodes in cut: %d\n", BestCut.GetNodes());
+    printf("  Edges inside: %d\n", BestCut.GetEdges());
+    printf("  Cut size: %d\n", BestCut.GetCutSz());
+    printf("  Conductance: %.6f\n", BestCut.GetPhi());
+    if (!BestCut.CutNIdV.Empty()) {
+      printf("  Node IDs in cut: ");
+      for (int i = 0; i < TMath::Mn(20, BestCut.CutNIdV.Len()); i++) {
+        printf("%d ", BestCut.CutNIdV[i].Val);
+      }
+      if (BestCut.CutNIdV.Len() > 20) {
+        printf("... (and %d more)", BestCut.CutNIdV.Len() - 20);
+      }
+      printf("\n");
+    }
+  }
+  printf("\n");
 }
 
 void TLocClustStat::AddBagOfWhiskers() {
@@ -894,6 +919,24 @@ void TLocClustStat::SaveTxtInfo(const TStr& OutFNmPref, const TStr& Desc, const 
   GP.SetScale(gpsLog10XY);
   GP.SetXYLabel("k (number of nodes in the cluster)", "Normalized community score (lower is better)");
   GP.SavePng();
+}
+
+void TLocClustStat::SaveBestCut(const TStr& OutFNm) const {
+  if (BestCut.CutNIdV.Empty()) {
+    printf("Warning: No best cut nodes to save.\n");
+    return;
+  }
+  const TStr FNm = TStr::Fmt("%s.bestcut.txt", OutFNm.CStr());
+  FILE *F = fopen(FNm.CStr(), "wt");
+  fprintf(F, "# Best Cut with Lowest Conductance\n");
+  fprintf(F, "# Nodes: %d, Edges: %d, Cut Size: %d, Conductance: %.6f\n",
+    BestCut.GetNodes(), BestCut.GetEdges(), BestCut.GetCutSz(), BestCut.GetPhi());
+  fprintf(F, "# Node IDs in the best cut:\n");
+  for (int i = 0; i < BestCut.CutNIdV.Len(); i++) {
+    fprintf(F, "%d\n", BestCut.CutNIdV[i].Val);
+  }
+  fclose(F);
+  printf("Best cut saved to: %s (%d nodes)\n", FNm.CStr(), BestCut.CutNIdV.Len());
 }
 
 // conductances if clusters are composed of disjoint pieces that can be separated
