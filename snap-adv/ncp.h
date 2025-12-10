@@ -65,7 +65,7 @@ public:
   /// After the function ApproxPageRank() has been run the SupportSweep() computes the volume, cut size, node ids, conductance vectors. 
   void SupportSweep();
   /// Finds minimum conductance cut in the graph around the seed node. ##TLocClust::FindBestCut
-  void FindBestCut(const int& SeedNode, const int& ClustSz, const double& MinSizeFrac=0.2);
+  void FindBestCut(const int& SeedNode, const int& ClustSz, const double& MinSizeFrac=0.2, const int& MustIncludeNId=-1);
 
   /// Plots the cluster volume vs. cluster size K (cluster is composed of nodes NIdV[1...K]).
   void PlotVolDistr(const TStr& OutFNm, TStr Desc=TStr()) const;

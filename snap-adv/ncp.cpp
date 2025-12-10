@@ -78,14 +78,31 @@ void TLocClust::SupportSweep() {
     VolV.Add(Vol);  CutV.Add(Cut);  PhiV.Add(Phi);
   }}
 
-void TLocClust::FindBestCut(const int& SeedNode, const int& ClustSz, const double& MinSizeFrac) {
+void TLocClust::FindBestCut(const int& SeedNode, const int& ClustSz, const double& MinSizeFrac, const int& MustIncludeNId) {
   double MaxPhi = TFlt::Mx;
   BestCutIdx = -1;
   SeedNId = SeedNode;
   // calculate pagerank and cut sets
   ApproxPageRank(SeedNId, 1.0/double(ClustSz));
   for (int i = 0; i < ProbH.Len(); i++) {
-    ProbH[i] /= Graph->GetNI(ProbH.GetKey(i)).GetOutDeg(); }
+    ProbH[i] /= Graph->GetNI(ProbH.GetKey(i)).GetOutDeg();}
+  // SMOOTHEST APPROACH: If MustIncludeNId is specified, boost its PageRank to ensure it ranks first
+  // This way it will naturally be included in all cuts during the sweep
+  if (MustIncludeNId >= 0 && Graph->IsNode(MustIncludeNId)) {
+    // Find the maximum PageRank score
+    double MaxScore = 0.0;
+    for (int i = 0; i < ProbH.Len(); i++) {
+      if (ProbH[i] > MaxScore) { MaxScore = ProbH[i]; }
+    }
+    // Set MustIncludeNId's score to be higher than any other node
+    // If it's not in ProbH yet, add it
+    if (ProbH.IsKey(MustIncludeNId)) {
+      ProbH.GetDat(MustIncludeNId) = MaxScore + 1.0;
+    } else {
+      ProbH.AddDat(MustIncludeNId, MaxScore + 1.0);
+    }
+  }
+
   ProbH.SortByDat(false);
   SupportSweep();
   // find best cut
@@ -216,11 +233,11 @@ void TLocClust::GetCutStat(const PUNGraph& Graph, const TIntSet& NIdSet, int& Vo
   }
 }
 
-void TLocClust::PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc, const bool& BagOfWhiskers, const bool& RewireNet, const int& KMin, const int& KMax, const int& Coverage, const bool& SaveTxtStat, const bool& PlotBoltzman, const int& SeedNId) {
+void TLocClust::PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc, const bool& BagOfWhiskers, const bool& RewireNet, const int& KMin, const int& KMax, const int& Coverage, const bool& SaveTxtStat, const bool& PlotBoltzman, const int& MustIncludeNId) {
   const double Alpha = 0.001, KFac = 1.5, SizeFrac = 0.001;
   //const int KMin = 2, KMax = Mega(100), Coverage = 10;
   TLocClustStat ClusStat1(Alpha, KMin, KMax, KFac, Coverage, SizeFrac);
-  ClusStat1.Run(Graph, false, PlotBoltzman, SaveTxtStat, SeedNId);
+  ClusStat1.Run(Graph, false, PlotBoltzman, SaveTxtStat, MustIncludeNId);
   if (BagOfWhiskers) { ClusStat1.AddBagOfWhiskers(); }
   TLocClustStat ClusStat2(Alpha, KMin, KMax, KFac, Coverage, SizeFrac);
   ClusStat1.ImposeNCP(ClusStat2, FNm, Desc, "ORIGINAL", "REWIRED"); // plot before rewiring
@@ -232,7 +249,7 @@ void TLocClust::PlotNCP(const PUNGraph& Graph, const TStr& FNm, const TStr Desc,
     ClusStat1.PlotBoltzmanCurve(FNm, Desc);
   }
   if (RewireNet) {
-    ClusStat2.Run(TSnap::GenRewire(Graph, 50, TInt::Rnd), false, false, false, SeedNId);
+    ClusStat2.Run(TSnap::GenRewire(Graph, 50, TInt::Rnd), false, false, false, MustIncludeNId);
     if (BagOfWhiskers) { ClusStat2.AddBagOfWhiskers(); }
     ClusStat1.ImposeNCP(ClusStat2, FNm, Desc, "ORIGINAL", "REWIRED"); // if rewire, plot again
   }
@@ -298,7 +315,7 @@ void TLocClustStat::Clr() {
   BagOfWhiskerV.Clr(false); // (Size, Conductance) of bag of whiskers clusters
 }
 
-void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const bool& SaveAllCond, const bool& SaveBestNodesAtK, const int& SeedNId) {
+void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const bool& SaveAllCond, const bool& SaveBestNodesAtK, const int& MustIncludeNId) {
   Graph = TSnap::GetMxWcc(_Graph);
   const int Nodes = Graph->GetNodes();
   const int Edges = Graph->GetEdges();
@@ -307,8 +324,8 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
   printf("  K: %d -- %g -- %dm\n", KMin(), KFac(), int(KMax/Mega(1)));
   printf("  Coverage: %d\n", Coverage());
   printf("  SizeFrac: %g\n", SizeFrac());
-  if (SeedNId >= 0) {
-    printf("  Seed Node: %d (constant seed - single node NCP)\n", SeedNId);
+  if (MustIncludeNId >= 0) {
+    printf("  Must-Include Node: %d (all cuts must contain this node, one run will use it as seed)\n", MustIncludeNId);
   }
   printf("\n");
   TExeTm TotTm;
@@ -331,16 +348,26 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
   }
   for (int K = KMin, cnt=1; K < KMax; K = int(KFac * double(K))+1, cnt++) {
     if (K == prevK) { K++; } prevK = K;
-    const int Runs = (SeedNId >= 0) ? 1 : (2 + int(Coverage /**pow(1.1, cnt)*/ * floor(double(Graph->GetEdges()) / double(K))));
+    const int Runs = 2 + int(Coverage /**pow(1.1, cnt)*/ * floor(double(Graph->GetEdges()) / double(K)));
     printf("%d] K: %d, %d runs\n", cnt+1, K, Runs);
     if (NextDone) { break; } // done
     if (K+1 > 2*Graph->GetEdges()) { K = Graph->GetEdges(); NextDone=true; }
     //if (K+1 > Graph->GetEdges()) { K = Graph->GetEdges(); NextDone=true; }
     TExeTm ExeTm, IterTm;
     double MeanSz=0.0, MeanVol=0.0, Count=0.0;
+    bool MustIncludeUsedAsSeed = false;
     for (int run = 0; run < Runs; run++) {
-      const int CurrentSeedNId = (SeedNId >= 0) ? SeedNId : Graph->GetRndNId();  IterTm.Tick();
-      Clust.FindBestCut(CurrentSeedNId, K, SizeFrac);
+      // Ensure one run uses MustIncludeNId as seed (preferably the first run)
+      int CurrentSeedNId;
+      if (MustIncludeNId >= 0 && run == 0 && !MustIncludeUsedAsSeed) {
+        CurrentSeedNId = MustIncludeNId;
+        MustIncludeUsedAsSeed = true;
+      } else {
+        CurrentSeedNId = Graph->GetRndNId();
+      }
+
+      IterTm.Tick();
+      Clust.FindBestCut(CurrentSeedNId, K, SizeFrac, MustIncludeNId);
       const int Sz = Clust.BestCutNodes();
       const int Vol = Clust.GetCutVol();
       const double Phi = TMath::Round(Clust.GetCutPhi(), 4);
@@ -358,6 +385,7 @@ void TLocClustStat::Run(const PUNGraph& _Graph, const bool& SaveAllSweeps, const
         IAssert((Clust.GetVol(s) - cut) % 2 == 0);
         IAssert(phi == double(cut)/double(2*edges+cut));
         IAssert(phi >= 1.0/double((1+s)*s+1));
+
         //// If we want to take pieces that minimize some other community goodness measure
         // TCutInfo CutInfo(size, edges, cut); Clust.GetNIdV().GetSubValV(0, size-1, CutInfo.CutNIdV);
         //double MxFrac=0, AvgFrac=0, MedianFrac=0, Pct9Frac=0, Flake=0;
