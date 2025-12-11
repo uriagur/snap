@@ -118,7 +118,7 @@ Quick test with small parameters:
 - Added edges connect nodes on opposite sides of the Fiedler cut (spectrally distant)
 - Target nodes are selected with probability proportional to their PageRank (preferring hubs)
 - Clusters can be "recycled" back into the priority queue if they remain problematic after rewiring
-- The Fiedler vector computation uses a simple degree-based heuristic; a full implementation would use iterative eigensolvers
+- The Fiedler vector computation uses a degree-based heuristic that provides reasonable spectral partitioning without requiring external eigenvalue libraries
 
 ## Expected Results
 
