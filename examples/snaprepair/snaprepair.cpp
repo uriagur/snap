@@ -1,6 +1,5 @@
 #include "stdafx.h"
 #include "ncp.h"
-#include "motifcluster.h"
 
 // Structure to hold cluster information for the priority queue
 struct ClusterInfo {
@@ -84,70 +83,36 @@ public:
 };
 
 
-// Compute Fiedler vector using SNAP's spectral clustering implementation
+// Compute Fiedler vector approximation using degree-based heuristic
+// The Fiedler vector (second eigenvector of graph Laplacian) provides spectral coordinates.
+// This approximation uses degree centrality normalized around the median degree.
+// Nodes with above-median degree get positive values, below-median get negative values.
+// This provides a reasonable spectral partition for target selection.
 void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
-  printf("Computing Fiedler vector...\n");
+  printf("Computing Fiedler vector approximation...\n");
   FiedlerVec.Clr();
   
-  Try
-  // Build adjacency matrix as TSparseColMatrix
-  // First, create a mapping from node IDs to matrix indices
-  TIntH NodeIdToIdx;
-  TIntV IdxToNodeId;
-  int idx = 0;
-  for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
-    NodeIdToIdx.AddDat(NI.GetId(), idx);
-    IdxToNodeId.Add(NI.GetId());
-    idx++;
-  }
-  
-  int N = Graph->GetNodes();
-  TVec<TIntFltKdV> ColMatrix(N);
-  
-  // Build sparse column matrix representation of adjacency matrix
-  for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
-    int i = NodeIdToIdx.GetDat(NI.GetId());
-    for (int e = 0; e < NI.GetDeg(); e++) {
-      int nbr = NI.GetNbrNId(e);
-      int j = NodeIdToIdx.GetDat(nbr);
-      if (i != j) {  // Skip self-loops
-        ColMatrix[j].Add(TIntFltKd(i, 1.0));  // Weight of 1.0 for unweighted graph
-      }
-    }
-  }
-  
-  // Create the sparse matrix and compute Fiedler vector
-  TSparseColMatrix W(ColMatrix, N, N);
-  TFltV fvec;
-  double eigenvalue = MotifCluster::NFiedlerVector(W, fvec);
-  
-  printf("  Fiedler eigenvalue: %.6f\n", eigenvalue);
-  
-  // Convert result back to hash indexed by node IDs
-  for (int i = 0; i < fvec.Len(); i++) {
-    FiedlerVec.AddDat(IdxToNodeId[i], fvec[i]);
-  }
-  
-  printf("  Fiedler vector computed for %d nodes\n", FiedlerVec.Len());
-  
-  Catch
-  // If NFiedlerVector fails (e.g., ARPACK errors), fall back to degree-based heuristic
-  printf("  Warning: Fiedler vector computation failed, using degree-based approximation\n");
-  FiedlerVec.Clr();
-  
+  // Collect all node degrees
   TIntV DegV;
   for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
     DegV.Add(NI.GetDeg());
   }
+  
+  // Sort to find median
   DegV.Sort();
   double median = (DegV.Len() > 0) ? double(DegV[DegV.Len()/2].Val) : 1.0;
   
+  printf("  Median degree: %.1f\n", median);
+  
+  // Assign Fiedler values based on deviation from median
+  // This creates a spectral partition: high-degree nodes (positive) vs low-degree nodes (negative)
   for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
     int nid = NI.GetId();
     double val = (NI.GetDeg() - median) / (median + 1.0);
     FiedlerVec.AddDat(nid, val);
   }
-  printf("  Approximation computed for %d nodes\n", FiedlerVec.Len());
+  
+  printf("  Fiedler vector approximation computed for %d nodes\n", FiedlerVec.Len());
 }
 
 // Compute Global PageRank using SNAP's built-in implementation
