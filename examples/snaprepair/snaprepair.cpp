@@ -92,6 +92,12 @@ void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
   printf("Computing Fiedler vector approximation...\n");
   FiedlerVec.Clr();
   
+  const int N = Graph->GetNodes();
+  if (N == 0) {
+    printf("  Warning: Graph has no nodes\n");
+    return;
+  }
+  
   // Collect all node degrees
   TIntV DegV;
   for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
