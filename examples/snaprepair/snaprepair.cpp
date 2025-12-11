@@ -21,6 +21,69 @@ struct ClusterInfo {
   }
 };
 
+// Min-heap priority queue for ClusterInfo (lowest conductance has highest priority)
+class ClusterPriorityQueue {
+private:
+  TVec<ClusterInfo> Heap;
+  
+  int Parent(int i) { return (i - 1) / 2; }
+  int Left(int i) { return 2 * i + 1; }
+  int Right(int i) { return 2 * i + 2; }
+  
+  void HeapifyUp(int idx) {
+    while (idx > 0 && Heap[idx].Conductance < Heap[Parent(idx)].Conductance) {
+      Heap.Swap(idx, Parent(idx));
+      idx = Parent(idx);
+    }
+  }
+  
+  void HeapifyDown(int idx) {
+    int smallest = idx;
+    int left = Left(idx);
+    int right = Right(idx);
+    
+    if (left < Heap.Len() && Heap[left].Conductance < Heap[smallest].Conductance) {
+      smallest = left;
+    }
+    if (right < Heap.Len() && Heap[right].Conductance < Heap[smallest].Conductance) {
+      smallest = right;
+    }
+    
+    if (smallest != idx) {
+      Heap.Swap(idx, smallest);
+      HeapifyDown(smallest);
+    }
+  }
+  
+public:
+  ClusterPriorityQueue() {}
+  
+  void Push(const ClusterInfo& cluster) {
+    Heap.Add(cluster);
+    HeapifyUp(Heap.Len() - 1);
+  }
+  
+  ClusterInfo Pop() {
+    IAssert(!IsEmpty());
+    ClusterInfo top = Heap[0];
+    Heap[0] = Heap[Heap.Len() - 1];
+    Heap.DelLast();
+    if (!IsEmpty()) {
+      HeapifyDown(0);
+    }
+    return top;
+  }
+  
+  bool IsEmpty() const {
+    return Heap.Len() == 0;
+  }
+  
+  int Size() const {
+    return Heap.Len();
+  }
+};
+
+
 // Compute Fiedler vector using SNAP's spectral clustering implementation
 void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
   printf("Computing Fiedler vector...\n");
@@ -112,7 +175,7 @@ TUInt64 HashNodeSet(const TIntV& NodeIds) {
 
 // Phase II: Robust SNAP Scanner
 void BuildTriageQueue(const PUNGraph& Graph, 
-                     TVec<ClusterInfo>& TriageVec,
+                     ClusterPriorityQueue& TriageQueue,
                      int KMin, int KMax, double KFac, int Coverage, double PhiThreshold) {
   printf("\nPhase II: Building Triage Queue\n");
   printf("  KMin=%d, KMax=%d, KFac=%.2f, Coverage=%d, PhiThreshold=%.3f\n", 
@@ -157,7 +220,7 @@ void BuildTriageQueue(const PUNGraph& Graph,
             int vol = Clust.GetVol(i);
             int cut = Clust.GetCut(i);
             
-            TriageVec.Add(ClusterInfo(phi, SeedNId, vol, cut, ClusterNIds));
+            TriageQueue.Push(ClusterInfo(phi, SeedNId, vol, cut, ClusterNIds));
             addedToQueue++;
           }
         }
@@ -167,10 +230,7 @@ void BuildTriageQueue(const PUNGraph& Graph,
   
   printf("  Total scans: %d\n", totalScans);
   printf("  Clusters added to queue: %d\n", addedToQueue);
-  
-  // Sort by conductance (ascending)
-  TriageVec.Sort(true);
-  printf("  Queue size: %d\n", TriageVec.Len());
+  printf("  Queue size: %d\n", TriageQueue.Size());
 }
 
 // Select target node based on Fiedler sign and PageRank
@@ -228,7 +288,7 @@ int SelectTarget(const PUNGraph& Graph, int SourceNId,
 
 // Phase III: Triage and Repair
 void TriageAndRepair(PUNGraph& Graph,
-                    TVec<ClusterInfo>& TriageVec,
+                    ClusterPriorityQueue& TriageQueue,
                     const TIntFltH& FiedlerVec, const TIntFltH& PageRankVec,
                     int Budget, double PhiThreshold, TIntPrV& AddedEdges) {
   printf("\nPhase III: Triage and Repair\n");
@@ -237,15 +297,13 @@ void TriageAndRepair(PUNGraph& Graph,
   
   int edgesAdded = 0;
   int recycled = 0;
-  int idx = 0;
   
-  while (Budget > 0 && idx < TriageVec.Len()) {
-    ClusterInfo cluster = TriageVec[idx];
-    idx++;
+  while (Budget > 0 && !TriageQueue.IsEmpty()) {
+    ClusterInfo cluster = TriageQueue.Pop();
     
     if (edgesAdded % 10 == 0 && edgesAdded > 0) {
-      printf("  Progress: %d/%d edges added, Queue remaining: %d\n", 
-             edgesAdded, edgesAdded + Budget, TriageVec.Len() - idx);
+      printf("  Progress: %d/%d edges added, Queue size: %d\n", 
+             edgesAdded, edgesAdded + Budget, TriageQueue.Size());
     }
     
     // Source: seed node
@@ -272,9 +330,9 @@ void TriageAndRepair(PUNGraph& Graph,
       int newCut = cluster.Cut + 1;  // Assuming target is outside cluster
       double newPhi = double(newCut) / double(newVol);
       
-      // Recycle if still below threshold - add back to queue
+      // Recycle if still below threshold - push back to priority queue
       if (newPhi < PhiThreshold) {
-        TriageVec.Add(ClusterInfo(newPhi, source, newVol, newCut, cluster.NodeIds));
+        TriageQueue.Push(ClusterInfo(newPhi, source, newVol, newCut, cluster.NodeIds));
         recycled++;
       }
     }
@@ -282,7 +340,7 @@ void TriageAndRepair(PUNGraph& Graph,
   
   printf("  Total edges added: %d\n", edgesAdded);
   printf("  Clusters recycled: %d\n", recycled);
-  printf("  Final queue size: %d\n", TriageVec.Len() - idx);
+  printf("  Final queue size: %d\n", TriageQueue.Size());
 }
 
 int main(int argc, char* argv[]) {
@@ -332,12 +390,12 @@ int main(int argc, char* argv[]) {
   ComputeGlobalPageRank(Graph, PageRankVec);
   
   // Phase II: Build Triage Queue
-  TVec<ClusterInfo> TriageVec;
-  BuildTriageQueue(Graph, TriageVec, KMin, KMax, KFac, Coverage, PhiThreshold);
+  ClusterPriorityQueue TriageQueue;
+  BuildTriageQueue(Graph, TriageQueue, KMin, KMax, KFac, Coverage, PhiThreshold);
   
   // Phase III: Triage and Repair
   TIntPrV AddedEdges;
-  TriageAndRepair(Graph, TriageVec, FiedlerVec, PageRankVec, Budget, PhiThreshold, AddedEdges);
+  TriageAndRepair(Graph, TriageQueue, FiedlerVec, PageRankVec, Budget, PhiThreshold, AddedEdges);
   
   // Save results
   printf("\nSaving results...\n");
