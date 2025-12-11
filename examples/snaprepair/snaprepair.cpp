@@ -100,7 +100,17 @@ void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
   
   // Sort to find median
   DegV.Sort();
-  double median = (DegV.Len() > 0) ? double(DegV[DegV.Len()/2].Val) : 1.0;
+  double median;
+  if (DegV.Len() == 0) {
+    median = 1.0;
+  } else if (DegV.Len() % 2 == 1) {
+    // Odd number of elements: take middle element
+    median = double(DegV[DegV.Len() / 2].Val);
+  } else {
+    // Even number of elements: average of two middle elements
+    int mid = DegV.Len() / 2;
+    median = (double(DegV[mid - 1].Val) + double(DegV[mid].Val)) / 2.0;
+  }
   
   printf("  Median degree: %.1f\n", median);
   
