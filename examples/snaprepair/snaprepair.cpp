@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ncp.h"
+#include "motifcluster.h"
 
 // Structure to hold cluster information for the priority queue
 struct ClusterInfo {
@@ -20,15 +21,57 @@ struct ClusterInfo {
   }
 };
 
-// Compute Fiedler vector (second smallest eigenvector of Laplacian)
+// Compute Fiedler vector using SNAP's spectral clustering implementation
 void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
   printf("Computing Fiedler vector...\n");
-  // For now, use a simple approximation based on degree centrality
-  // A full implementation would use Lanczos or power iteration
   FiedlerVec.Clr();
   
-  // Simple heuristic: assign positive values to high-degree nodes
-  // and negative values to low-degree nodes (this is a placeholder)
+  Try
+  // Build adjacency matrix as TSparseColMatrix
+  // First, create a mapping from node IDs to matrix indices
+  TIntH NodeIdToIdx;
+  TIntV IdxToNodeId;
+  int idx = 0;
+  for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
+    NodeIdToIdx.AddDat(NI.GetId(), idx);
+    IdxToNodeId.Add(NI.GetId());
+    idx++;
+  }
+  
+  int N = Graph->GetNodes();
+  TVec<TIntFltKdV> ColMatrix(N);
+  
+  // Build sparse column matrix representation of adjacency matrix
+  for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
+    int i = NodeIdToIdx.GetDat(NI.GetId());
+    for (int e = 0; e < NI.GetDeg(); e++) {
+      int nbr = NI.GetNbrNId(e);
+      int j = NodeIdToIdx.GetDat(nbr);
+      if (i != j) {  // Skip self-loops
+        ColMatrix[j].Add(TIntFltKd(i, 1.0));  // Weight of 1.0 for unweighted graph
+      }
+    }
+  }
+  
+  // Create the sparse matrix and compute Fiedler vector
+  TSparseColMatrix W(ColMatrix, N, N);
+  TFltV fvec;
+  double eigenvalue = MotifCluster::NFiedlerVector(W, fvec);
+  
+  printf("  Fiedler eigenvalue: %.6f\n", eigenvalue);
+  
+  // Convert result back to hash indexed by node IDs
+  for (int i = 0; i < fvec.Len(); i++) {
+    FiedlerVec.AddDat(IdxToNodeId[i], fvec[i]);
+  }
+  
+  printf("  Fiedler vector computed for %d nodes\n", FiedlerVec.Len());
+  
+  Catch
+  // If NFiedlerVector fails (e.g., ARPACK errors), fall back to degree-based heuristic
+  printf("  Warning: Fiedler vector computation failed, using degree-based approximation\n");
+  FiedlerVec.Clr();
+  
   TIntV DegV;
   for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
     DegV.Add(NI.GetDeg());
@@ -41,52 +84,18 @@ void ComputeFiedlerVector(const PUNGraph& Graph, TIntFltH& FiedlerVec) {
     double val = (NI.GetDeg() - median) / (median + 1.0);
     FiedlerVec.AddDat(nid, val);
   }
-  printf("  Fiedler vector computed for %d nodes\n", FiedlerVec.Len());
+  printf("  Approximation computed for %d nodes\n", FiedlerVec.Len());
 }
 
-// Compute Global PageRank
+// Compute Global PageRank using SNAP's built-in implementation
 void ComputeGlobalPageRank(const PUNGraph& Graph, TIntFltH& PageRankVec, double Alpha=0.85) {
   printf("Computing Global PageRank...\n");
+  const double Eps = 1e-4;
   const int MaxIter = 100;
-  const double Eps = 1e-6;
-  const int N = Graph->GetNodes();
   
-  PageRankVec.Clr();
-  TIntFltH OldPR;
+  // Use SNAP's built-in PageRank computation
+  TSnap::GetPageRank(Graph, PageRankVec, Alpha, Eps, MaxIter);
   
-  // Initialize
-  for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
-    PageRankVec.AddDat(NI.GetId(), 1.0 / N);
-  }
-  
-  // Power iteration
-  for (int iter = 0; iter < MaxIter; iter++) {
-    OldPR = PageRankVec;
-    double diff = 0.0;
-    
-    for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
-      int nid = NI.GetId();
-      double sum = 0.0;
-      
-      // Sum contributions from neighbors
-      for (int e = 0; e < NI.GetInDeg(); e++) {
-        int nbr = NI.GetInNId(e);
-        int nbrDeg = Graph->GetNI(nbr).GetOutDeg();
-        if (nbrDeg > 0) {
-          sum += OldPR.GetDat(nbr) / nbrDeg;
-        }
-      }
-      
-      double newPR = (1.0 - Alpha) / N + Alpha * sum;
-      PageRankVec.AddDat(nid, newPR);
-      diff += fabs(newPR - OldPR.GetDat(nid));
-    }
-    
-    if (diff < Eps) {
-      printf("  PageRank converged after %d iterations\n", iter+1);
-      break;
-    }
-  }
   printf("  PageRank computed for %d nodes\n", PageRankVec.Len());
 }
 
