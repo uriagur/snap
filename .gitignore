@@ -49,6 +49,14 @@ doxygen/snap
 # Ignore executables, but keep everything else
 snap-core/testSnap
 test/run-all-tests
+examples/*/[a-z]*[a-z]
+!examples/*/*.cpp
+!examples/*/*.h
+!examples/*/*.c
+!examples/*/*.txt
+!examples/*/*.md
+!examples/*/*.sh
+!examples/*/Makefile*
 !test/graphviz/base*
 tutorials/*
 !tutorials/*.*

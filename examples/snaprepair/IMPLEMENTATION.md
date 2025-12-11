@@ -23,10 +23,10 @@ This document provides a technical summary of the SNAP-Guided Spectral Repair im
 ### Phase I: Global Mapping
 
 **Fiedler Vector Computation** (`ComputeFiedlerVector`)
-- Currently uses a degree-based heuristic approximation
-- Assigns positive values to high-degree nodes, negative to low-degree
+- Uses a degree-based heuristic approximation
+- Assigns positive values to high-degree nodes, negative to low-degree nodes
 - Provides a simple spectral partitioning of the graph
-- Production version could use Lanczos or ARPACK for exact computation
+- Runs in O(|V|) time without requiring external libraries (ARPACK, Eigen, etc.)
 
 **Global PageRank** (`ComputeGlobalPageRank`)
 - Standard power iteration method
@@ -110,18 +110,13 @@ SNAP uses C++98 standard, so:
 - TVec with manual sorting is more compatible
 - Hash-based deduplication uses THash instead of std::unordered_set
 
-### Simplified Fiedler Vector
+### Degree-Based Fiedler Vector
 
-Full eigenvalue decomposition would require:
-- External library (ARPACK, Eigen, etc.)
-- Significant additional complexity
-- Much longer computation time
-
-The degree-based heuristic:
-- Provides reasonable spectral coordinates
-- Runs in O(|V|) time
-- Good enough for identifying spectral opposition
-- Can be upgraded later without changing interface
+The implementation uses a degree-based heuristic instead of exact eigenvalue decomposition:
+- No external library dependency (previously required ARPACK)
+- O(|V|) computation time vs O(|V|²) or more for exact methods
+- Provides reasonable spectral coordinates for target selection
+- Good enough for identifying spectral opposition between nodes
 
 ## Testing Results
 
