@@ -5,15 +5,15 @@
 struct ClusterInfo {
   double Conductance;
   int SeedNId;
+  int K;          // Cluster size (used to recompute cluster)
   int Volume;
   int Cut;
-  TIntV NodeIds;  // Node IDs in the cluster
-  
-  ClusterInfo() : Conductance(1.0), SeedNId(-1), Volume(0), Cut(0) {}
-  
-  ClusterInfo(double phi, int seed, int vol, int cut, const TIntV& nids) :
-    Conductance(phi), SeedNId(seed), Volume(vol), Cut(cut), NodeIds(nids) {}
-  
+
+  ClusterInfo() : Conductance(1.0), SeedNId(-1), K(0), Volume(0), Cut(0) {}
+
+  ClusterInfo(double phi, int seed, int k, int vol, int cut) :
+    Conductance(phi), SeedNId(seed), K(k), Volume(vol), Cut(cut) {}
+
   // For sorting (lower conductance first)
   bool operator<(const ClusterInfo& other) const {
     return Conductance < other.Conductance;
@@ -79,6 +79,37 @@ public:
   
   int Size() const {
     return Heap.Len();
+  }
+
+  // Save priority queue to binary file (space-efficient)
+  void Save(const TStr& FileName) const {
+    TFOut FOut(FileName);
+    FOut.Save(Heap.Len());
+    for (int i = 0; i < Heap.Len(); i++) {
+      const ClusterInfo& ci = Heap[i];
+      FOut.Save(ci.Conductance);
+      FOut.Save(ci.SeedNId);
+      FOut.Save(ci.K);
+      FOut.Save(ci.Volume);
+      FOut.Save(ci.Cut);
+    }
+  }
+
+  // Load priority queue from binary file
+  void Load(const TStr& FileName) {
+    TFIn FIn(FileName);
+    int len;
+    FIn.Load(len);
+    Heap.Gen(len);
+    for (int i = 0; i < len; i++) {
+      ClusterInfo ci;
+      FIn.Load(ci.Conductance);
+      FIn.Load(ci.SeedNId);
+      FIn.Load(ci.K);
+      FIn.Load(ci.Volume);
+      FIn.Load(ci.Cut);
+      Heap.Add(ci);
+    }
   }
 };
 
@@ -189,7 +220,7 @@ void BuildTriageQueue(const PUNGraph& Graph,
         double phi = Clust.GetPhi(i);
         
         if (phi < PhiThreshold) {
-          // Extract cluster
+          // Extract cluster node IDs for deduplication only
           TIntV ClusterNIds;
           Clust.GetNIdV().GetSubValV(0, i, ClusterNIds);
           
@@ -200,8 +231,10 @@ void BuildTriageQueue(const PUNGraph& Graph,
             
             int vol = Clust.GetVol(i);
             int cut = Clust.GetCut(i);
-            
-            TriageQueue.Push(ClusterInfo(phi, SeedNId, vol, cut, ClusterNIds));
+            int clusterSize = ClusterNIds.Len();
+
+            // Store only metadata (seed, K, phi, vol, cut) - NOT the full node list!
+            TriageQueue.Push(ClusterInfo(phi, SeedNId, clusterSize, vol, cut));
             addedToQueue++;
           }
         }
@@ -218,6 +251,11 @@ void BuildTriageQueue(const PUNGraph& Graph,
 int SelectTarget(const PUNGraph& Graph, int SourceNId, 
                 const TIntFltH& FiedlerVec, const TIntFltH& PageRankVec,
                 const TIntSet& ClusterNodes) {
+  // Validate source node
+  if (!Graph->IsNode(SourceNId)) {
+    return -1;  // Invalid source
+  }
+
   double sourceFiedler = FiedlerVec.GetDat(SourceNId);
   int sourceSign = (sourceFiedler >= 0) ? 1 : -1;
   
@@ -226,7 +264,8 @@ int SelectTarget(const PUNGraph& Graph, int SourceNId,
   for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
     int nid = NI.GetId();
     if (ClusterNodes.IsKey(nid)) continue;  // Skip nodes in cluster
-    
+    if (nid == SourceNId) continue;  // Skip source itself
+
     double fiedler = FiedlerVec.GetDat(nid);
     int sign = (fiedler >= 0) ? 1 : -1;
     
@@ -239,14 +278,21 @@ int SelectTarget(const PUNGraph& Graph, int SourceNId,
     // Fallback: any node not in cluster with high PageRank
     for (TUNGraph::TNodeI NI = Graph->BegNI(); NI < Graph->EndNI(); NI++) {
       int nid = NI.GetId();
-      if (!ClusterNodes.IsKey(nid)) {
+      if (!ClusterNodes.IsKey(nid) && nid != SourceNId) {
         Candidates.AddDat(nid, PageRankVec.GetDat(nid));
       }
     }
   }
   
   if (Candidates.Empty()) {
-    return Graph->GetRndNId();
+    // Last resort: random node (excluding source)
+    int target = Graph->GetRndNId();
+    int attempts = 0;
+    while (target == SourceNId && attempts < 100) {
+      target = Graph->GetRndNId();
+      attempts++;
+    }
+    return (target != SourceNId) ? target : -1;
   }
   
   // Weighted random selection
@@ -255,6 +301,11 @@ int SelectTarget(const PUNGraph& Graph, int SourceNId,
     totalWeight += Candidates[i];
   }
   
+  if (totalWeight <= 0.0) {
+    // All weights are zero, use uniform random
+    return Candidates.GetKey(TInt::Rnd.GetUniDevInt(Candidates.Len()));
+  }
+
   double r = TFlt::Rnd.GetUniDev() * totalWeight;
   double cumWeight = 0.0;
   for (int i = 0; i < Candidates.Len(); i++) {
@@ -279,6 +330,11 @@ void TriageAndRepair(PUNGraph& Graph,
   int edgesAdded = 0;
   int recycled = 0;
   
+  TLocClust Clust(Graph, 0.001);  // For recomputing clusters
+  int skippedInvalidSeed = 0;
+  int skippedInvalidTarget = 0;
+  int skippedEmptyCluster = 0;
+
   while (Budget > 0 && !TriageQueue.IsEmpty()) {
     ClusterInfo cluster = TriageQueue.Pop();
     
@@ -287,18 +343,59 @@ void TriageAndRepair(PUNGraph& Graph,
              edgesAdded, edgesAdded + Budget, TriageQueue.Size());
     }
     
+    // Validate seed node exists in graph
+    if (!Graph->IsNode(cluster.SeedNId)) {
+      skippedInvalidSeed++;
+      continue;
+    }
+
+    // Recompute the cluster from seed node and K
+    Clust.FindBestCut(cluster.SeedNId, cluster.K, 0.001);
+
+    // Get the cluster nodes
+    TIntV ClusterNIds;
+    if (Clust.GetRndWalkSup() > 0) {
+      // Find the cut with conductance closest to what we stored
+      int bestIdx = 0;
+      double minDiff = fabs(Clust.GetPhi(0) - cluster.Conductance);
+      for (int i = 1; i < Clust.GetRndWalkSup(); i++) {
+        double diff = fabs(Clust.GetPhi(i) - cluster.Conductance);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestIdx = i;
+        }
+      }
+      Clust.GetNIdV().GetSubValV(0, bestIdx, ClusterNIds);
+    }
+
+    if (ClusterNIds.Len() == 0) {
+      skippedEmptyCluster++;
+      continue;  // Skip if cluster couldn't be recomputed
+    }
+
     // Source: seed node
     int source = cluster.SeedNId;
     
     // Build cluster node set for target selection
-    TIntSet ClusterNodes(cluster.NodeIds.Len());
-    for (int i = 0; i < cluster.NodeIds.Len(); i++) {
-      ClusterNodes.AddKey(cluster.NodeIds[i]);
+    TIntSet ClusterNodes(ClusterNIds.Len());
+    for (int i = 0; i < ClusterNIds.Len(); i++) {
+      ClusterNodes.AddKey(ClusterNIds[i]);
     }
     
     // Select target
     int target = SelectTarget(Graph, source, FiedlerVec, PageRankVec, ClusterNodes);
     
+    // Validate target node
+    if (target < 0 || !Graph->IsNode(target)) {
+      skippedInvalidTarget++;
+      continue;
+    }
+
+    // Skip self-loops
+    if (source == target) {
+      continue;
+    }
+
     // Add edge if it doesn't exist
     if (!Graph->IsEdge(source, target)) {
       Graph->AddEdge(source, target);
@@ -306,14 +403,14 @@ void TriageAndRepair(PUNGraph& Graph,
       edgesAdded++;
       Budget--;
       
-      // Recalculate conductance
+      // Recalculate conductance (approximate)
       int newVol = cluster.Volume + 1;
       int newCut = cluster.Cut + 1;  // Assuming target is outside cluster
       double newPhi = double(newCut) / double(newVol);
       
-      // Recycle if still below threshold - push back to priority queue
+      // Recycle if still below threshold
       if (newPhi < PhiThreshold) {
-        TriageQueue.Push(ClusterInfo(newPhi, source, newVol, newCut, cluster.NodeIds));
+        TriageQueue.Push(ClusterInfo(newPhi, source, cluster.K, newVol, newCut));
         recycled++;
       }
     }
@@ -322,6 +419,18 @@ void TriageAndRepair(PUNGraph& Graph,
   printf("  Total edges added: %d\n", edgesAdded);
   printf("  Clusters recycled: %d\n", recycled);
   printf("  Final queue size: %d\n", TriageQueue.Size());
+  if (skippedInvalidSeed > 0 || skippedInvalidTarget > 0 || skippedEmptyCluster > 0) {
+    printf("  Skipped clusters:\n");
+    if (skippedInvalidSeed > 0) {
+      printf("    Invalid seed nodes: %d\n", skippedInvalidSeed);
+    }
+    if (skippedEmptyCluster > 0) {
+      printf("    Empty clusters: %d\n", skippedEmptyCluster);
+    }
+    if (skippedInvalidTarget > 0) {
+      printf("    Invalid targets: %d\n", skippedInvalidTarget);
+    }
+  }
 }
 
 int main(int argc, char* argv[]) {
@@ -338,11 +447,11 @@ int main(int argc, char* argv[]) {
                                             "Output file prefix");
   const int Budget = Env.GetIfArgPrefixInt("-b:", 100, 
                                            "Edge budget (number of edges to add)");
-  const double PhiThreshold = Env.GetIfArgPrefixFlt("-t:", 0.2, 
+  const double PhiThreshold = Env.GetIfArgPrefixFlt("-t:", 0.1,
                                                      "Conductance threshold for valley detection");
   const int KMin = Env.GetIfArgPrefixInt("-kmin:", 10, 
                                         "Minimum cluster size K");
-  const int KMax = Env.GetIfArgPrefixInt("-kmax:", 100, 
+  const int KMax = Env.GetIfArgPrefixInt("-kmax:", 100000,
                                         "Maximum cluster size K");
   const double KFac = Env.GetIfArgPrefixFlt("-kfac:", 1.2, 
                                            "K growth factor");
@@ -351,12 +460,30 @@ int main(int argc, char* argv[]) {
   const bool RunNCP = Env.GetIfArgPrefixBool("-ncp:", true, 
                                              "Run NCP plot after repair");
   
+  // New options for queue management
+  const bool BuildQueue = Env.GetIfArgPrefixBool("-buildq:", true,
+                                                 "Build priority queue (Phase I & II)");
+  const bool AddEdges = Env.GetIfArgPrefixBool("-repair:", true,
+                                               "Add edges (Phase III)");
+  const TStr SaveQueueFNm = Env.GetIfArgPrefixStr("-saveq:", "",
+                                                  "Save priority queue to file (empty = don't save)");
+  const TStr LoadQueueFNm = Env.GetIfArgPrefixStr("-loadq:", "",
+                                                  "Load priority queue from file (empty = don't load)");
+
   printf("SNAP-Guided Spectral Repair\n");
   printf("============================\n");
   printf("Input graph: %s\n", InFNm.CStr());
   printf("Output prefix: %s\n", OutFNm.CStr());
   printf("Budget: %d edges\n", Budget);
   printf("Phi threshold: %.3f\n", PhiThreshold);
+  printf("Build Queue: %s\n", BuildQueue ? "Yes" : "No");
+  printf("Add Edges: %s\n", AddEdges ? "Yes" : "No");
+  if (!SaveQueueFNm.Empty()) {
+    printf("Save Queue to: %s\n", SaveQueueFNm.CStr());
+  }
+  if (!LoadQueueFNm.Empty()) {
+    printf("Load Queue from: %s\n", LoadQueueFNm.CStr());
+  }
   printf("\n");
   
   // Load graph
@@ -364,47 +491,74 @@ int main(int argc, char* argv[]) {
   PUNGraph Graph = TSnap::GetMxWcc(TSnap::LoadEdgeList<PUNGraph>(InFNm, 0, 1));
   printf("  Nodes: %d, Edges: %d\n", Graph->GetNodes(), Graph->GetEdges());
   
-  // Phase I: Global Mapping
-  printf("\nPhase I: Global Mapping\n");
-  TIntFltH FiedlerVec, PageRankVec;
-  ComputeFiedlerVector(Graph, FiedlerVec);
-  ComputeGlobalPageRank(Graph, PageRankVec);
-  
-  // Phase II: Build Triage Queue
+  // Initialize priority queue
   ClusterPriorityQueue TriageQueue;
-  BuildTriageQueue(Graph, TriageQueue, KMin, KMax, KFac, Coverage, PhiThreshold);
-  
-  // Phase III: Triage and Repair
-  TIntPrV AddedEdges;
-  TriageAndRepair(Graph, TriageQueue, FiedlerVec, PageRankVec, Budget, PhiThreshold, AddedEdges);
-  
-  // Save results
-  printf("\nSaving results...\n");
-  
-  // Save added edges
-  TStr EdgesFNm = OutFNm + "_edges.txt";
-  FILE* FEdges = fopen(EdgesFNm.CStr(), "wt");
-  fprintf(FEdges, "# Added edges from SNAP-Guided Spectral Repair\n");
-  fprintf(FEdges, "# Format: source target\n");
-  fprintf(FEdges, "# Total edges added: %d\n", AddedEdges.Len());
-  for (int i = 0; i < AddedEdges.Len(); i++) {
-    fprintf(FEdges, "%d\t%d\n", AddedEdges[i].Val1.Val, AddedEdges[i].Val2.Val);
+
+  // Phase I & II: Build Queue (or load from file)
+  if (!LoadQueueFNm.Empty()) {
+    printf("\nLoading priority queue from file...\n");
+    TriageQueue.Load(LoadQueueFNm);
+    printf("  Loaded queue with %d clusters\n", TriageQueue.Size());
+  } else if (BuildQueue) {
+    // Phase I: Global Mapping
+    printf("\nPhase I: Global Mapping\n");
+    TIntFltH FiedlerVec, PageRankVec;
+    ComputeFiedlerVector(Graph, FiedlerVec);
+    ComputeGlobalPageRank(Graph, PageRankVec);
+
+    // Phase II: Build Triage Queue
+    BuildTriageQueue(Graph, TriageQueue, KMin, KMax, KFac, Coverage, PhiThreshold);
   }
-  fclose(FEdges);
-  printf("  Edges saved to: %s\n", EdgesFNm.CStr());
-  
-  // Save modified graph
-  TStr GraphFNm = OutFNm + "_graph.txt";
-  TSnap::SaveEdgeList(Graph, GraphFNm.CStr());
-  printf("  Modified graph saved to: %s\n", GraphFNm.CStr());
-  printf("  Final graph: Nodes=%d, Edges=%d\n", Graph->GetNodes(), Graph->GetEdges());
-  
-  // Optionally run NCP plot
-  if (RunNCP) {
-    printf("\nRunning NCP plot on modified graph...\n");
-    TLocClust::PlotNCP(Graph, OutFNm + "_ncp", 
-                      "SNAP-Guided Spectral Repair Results",
-                      false, false, 10, Mega(100), 10, false, false, -1);
+
+  // Save queue if requested
+  if (!SaveQueueFNm.Empty() && TriageQueue.Size() > 0) {
+    printf("\nSaving priority queue to file...\n");
+    TriageQueue.Save(SaveQueueFNm);
+    printf("  Queue saved to: %s\n", SaveQueueFNm.CStr());
+    printf("  Queue size: %d clusters\n", TriageQueue.Size());
+  }
+
+  // Phase III: Triage and Repair (if requested)
+  TIntPrV AddedEdges;
+  if (AddEdges && TriageQueue.Size() > 0) {
+    // Need to recompute Fiedler and PageRank for target selection
+    printf("\nComputing global vectors for target selection...\n");
+    TIntFltH FiedlerVec, PageRankVec;
+    ComputeFiedlerVector(Graph, FiedlerVec);
+    ComputeGlobalPageRank(Graph, PageRankVec);
+
+    TriageAndRepair(Graph, TriageQueue, FiedlerVec, PageRankVec, Budget, PhiThreshold, AddedEdges);
+  }
+
+  // Save results (if edges were added)
+  if (AddedEdges.Len() > 0) {
+    printf("\nSaving results...\n");
+
+    // Save added edges
+    TStr EdgesFNm = OutFNm + "_edges.txt";
+    FILE* FEdges = fopen(EdgesFNm.CStr(), "wt");
+    fprintf(FEdges, "# Added edges from SNAP-Guided Spectral Repair\n");
+    fprintf(FEdges, "# Format: source target\n");
+    fprintf(FEdges, "# Total edges added: %d\n", AddedEdges.Len());
+    for (int i = 0; i < AddedEdges.Len(); i++) {
+      fprintf(FEdges, "%d\t%d\n", AddedEdges[i].Val1.Val, AddedEdges[i].Val2.Val);
+    }
+    fclose(FEdges);
+    printf("  Edges saved to: %s\n", EdgesFNm.CStr());
+
+    // Save modified graph
+    TStr GraphFNm = OutFNm + "_graph.txt";
+    TSnap::SaveEdgeList(Graph, GraphFNm.CStr());
+    printf("  Modified graph saved to: %s\n", GraphFNm.CStr());
+    printf("  Final graph: Nodes=%d, Edges=%d\n", Graph->GetNodes(), Graph->GetEdges());
+
+    // Optionally run NCP plot
+    if (RunNCP) {
+      printf("\nRunning NCP plot on modified graph...\n");
+      TLocClust::PlotNCP(Graph, OutFNm + "_ncp",
+                        "SNAP-Guided Spectral Repair Results",
+                        false, false, 10, Mega(100), 10, false, false, -1);
+    }
   }
   
   Catch
