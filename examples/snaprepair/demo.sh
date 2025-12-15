@@ -10,12 +10,12 @@ echo "================================="
 echo ""
 
 # Configuration
-GRAPH_FILE="../as20graph.txt"
-OUTPUT_PREFIX="demo_repair"
-BUDGET=100
-PHI_THRESHOLD=0.2
+GRAPH_FILE="../musae_facebook_edges.txt"
+OUTPUT_PREFIX="musae_facebook_edges_repair10000"
+BUDGET=10000
+PHI_THRESHOLD=0.12
 KMIN=10
-KMAX=100
+KMAX=100000
 
 echo "Configuration:"
 echo "  Input Graph: $GRAPH_FILE"
@@ -66,16 +66,10 @@ if [ ! -f ../ncpplot/ncpplot ]; then
     cd ../ncpplot && make && cd ../snaprepair
 fi
 
-# Generate NCP plot for original graph
-echo "Generating NCP for original graph..."
-cd ../ncpplot
-./ncpplot -i:"$GRAPH_FILE" -o:demo_original -d:"Original AS20 Graph" -kmin:10 -kmax:100000 -c:10 -v:F
-cd ../snaprepair
-
 # Generate NCP plot for repaired graph
 echo "Generating NCP for repaired graph..."
 cd ../ncpplot
-./ncpplot -i:../snaprepair/"${OUTPUT_PREFIX}_graph.txt" -o:demo_repaired -d:"SNAP-Repaired AS20 Graph" -kmin:10 -kmax:100000 -c:10 -v:F
+./ncpplot -i:../snaprepair/"${OUTPUT_PREFIX}_graph.txt" -k:F
 cd ../snaprepair
 
 echo ""
