@@ -3,6 +3,6 @@
 
 ## Main application file
 MAIN = snaprepair
-DEPH = $(EXSNAPADV)/ncp.h
-DEPCPP = $(EXSNAPADV)/ncp.cpp
+DEPH = $(EXSNAPADV)/ncp.h ClusterManager.hpp RepairStrategies.h DynamicRepair.h
+DEPCPP = $(EXSNAPADV)/ncp.cpp RepairStrategies.cpp DynamicRepair.cpp
 
