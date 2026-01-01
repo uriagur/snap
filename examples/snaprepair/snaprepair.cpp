@@ -100,7 +100,10 @@ public:
     TFIn FIn(FileName);
     int len;
     FIn.Load(len);
+    Heap.Clr();
     Heap.Gen(len);
+
+    // Load all elements into the heap array
     for (int i = 0; i < len; i++) {
       ClusterInfo ci;
       FIn.Load(ci.Conductance);
@@ -109,6 +112,12 @@ public:
       FIn.Load(ci.Volume);
       FIn.Load(ci.Cut);
       Heap.Add(ci);
+    }
+
+    // Rebuild heap structure (heapify)
+    // Start from last non-leaf node and heapify down
+    for (int i = (Heap.Len() / 2) - 1; i >= 0; i--) {
+      HeapifyDown(i);
     }
   }
 };

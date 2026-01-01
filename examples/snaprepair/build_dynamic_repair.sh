@@ -17,13 +17,13 @@ if [ ! -f "test_dynamic_repair.cpp" ]; then
 fi
 
 # Build Snap.o if needed
-echo "Step 1: Building SNAP core library..."
-if [ ! -f "../../snap-core/Snap.o" ]; then
-    echo "  Building snap-core..."
-    make -C ../../snap-core
-else
-    echo "  snap-core already built (Snap.o exists)"
-fi
+#echo "Step 1: Building SNAP core library..."
+#if [ ! -f "../../snap-core/Snap.o" ]; then
+#    echo "  Building snap-core..."
+#    make -C ../../snap-core
+#else
+#    echo "  snap-core already built (Snap.o exists)"
+#fi
 
 # Build test_dynamic_repair
 echo ""
